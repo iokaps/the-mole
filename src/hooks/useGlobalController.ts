@@ -1,11 +1,20 @@
+import { config } from '@/config';
 import { kmClient } from '@/services/km-client';
+import { globalActions } from '@/state/actions/global-actions';
 import { globalStore } from '@/state/stores/global-store';
 import { useEffect } from 'react';
 import { useSnapshot } from 'valtio';
 import { useServerTimer } from './useServerTime';
 
 export function useGlobalController() {
-	const { controllerConnectionId } = useSnapshot(globalStore.proxy);
+	const {
+		controllerConnectionId,
+		started,
+		phase,
+		phaseStartTime,
+		currentRound,
+		tasks
+	} = useSnapshot(globalStore.proxy);
 	const connections = useSnapshot(globalStore.connections);
 	const connectionIds = connections.connectionIds;
 	const isGlobalController = controllerConnectionId === kmClient.connectionId;
@@ -29,16 +38,82 @@ export function useGlobalController() {
 			.catch(() => {});
 	}, [connectionIds, controllerConnectionId]);
 
-	// Run global controller-specific logic
+	// Run global controller-specific logic for phase transitions
 	useEffect(() => {
-		if (!isGlobalController) {
+		if (!isGlobalController || !started) {
 			return;
 		}
 
-		// Global controller-specific logic goes here
-		// For example, a time-based event that modifies the global state
-		// All global controller logic does not need to be time-based
-	}, [isGlobalController, serverTime]);
+		const elapsed = serverTime - phaseStartTime;
+
+		const handlePhaseTransition = async () => {
+			switch (phase) {
+				case 'role-reveal':
+					if (elapsed >= config.roleRevealDuration) {
+						await globalActions.nextRound();
+						await globalActions.setPhase('task-intro');
+					}
+					break;
+
+				case 'task-intro':
+					if (elapsed >= config.taskIntroDuration) {
+						await globalActions.setPhase('task-active');
+					}
+					break;
+
+				case 'task-active':
+					if (elapsed >= config.taskDuration) {
+						await globalActions.completeTask();
+						await globalActions.setPhase('task-results');
+					}
+					break;
+
+				case 'task-results':
+					if (elapsed >= config.taskResultsDuration) {
+						// Check if more rounds to play
+						if (currentRound < config.totalRounds) {
+							await globalActions.setPhase('task-intro');
+							await globalActions.nextRound();
+						} else {
+							// All tasks done, move to discussion
+							await globalActions.setPhase('discussion');
+						}
+					}
+					break;
+
+				case 'discussion':
+					if (elapsed >= config.discussionDuration) {
+						await globalActions.setPhase('voting');
+					}
+					break;
+
+				case 'voting':
+					// Check if all players have voted or time is up
+					const playerIds = Object.keys(globalStore.proxy.players);
+					const votes = Object.keys(globalStore.proxy.votes);
+					const allVoted = votes.length === playerIds.length;
+
+					if (allVoted || elapsed >= config.votingDuration) {
+						await globalActions.setPhase('game-results');
+					}
+					break;
+
+				case 'game-results':
+					// Stay here until host restarts
+					break;
+			}
+		};
+
+		handlePhaseTransition();
+	}, [
+		isGlobalController,
+		started,
+		serverTime,
+		phase,
+		phaseStartTime,
+		currentRound,
+		tasks.length
+	]);
 
 	return isGlobalController;
 }

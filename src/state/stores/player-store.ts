@@ -1,13 +1,17 @@
 import { kmClient } from '@/services/km-client';
 
+export type PlayerRole = 'mole' | 'crew' | null;
+
 export interface PlayerState {
 	name: string;
-	currentView: 'lobby' | 'shared-state' | 'connections';
+	role: PlayerRole;
+	hasVoted: boolean;
 }
 
 const initialState: PlayerState = {
 	name: '',
-	currentView: 'lobby'
+	role: null,
+	hasVoted: false
 };
 
 export const playerStore = kmClient.localStore<PlayerState>(
